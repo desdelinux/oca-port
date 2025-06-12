@@ -95,33 +95,65 @@ def extract_ref_info(repo, kind, ref, remote=None):
     info["ref"] = ref
     info["kind"] = kind
     info["remote"] = info["remote"] or remote
-    info.update({"org": None, "platform": None})
+    info.update({"org": None, "repo_full_name": None, "platform": None, "repo_name": None})
     if info["remote"]:
         remote_url = repo.remotes[info["remote"]].url
         p = giturlparse.parse(remote_url)
-        try:
-            info["repo"] = p.repo
-        except AttributeError:
-            pass
-        info["platform"] = p.platform
-        info["org"] = p.owner
+        if p.valid:
+            info["repo_name"] = p.name
+            info["platform"] = p.platform
+            info["org"] = p.owner
+            if p.owner and p.name:
+                info["repo_full_name"] = f"{p.owner}/{p.name}"
+            elif p.name: # Handles cases like local paths that are git repos but no owner
+                info["repo_full_name"] = p.name
+
     else:
         # Fallback on 'origin' to grab info like platform, and repository name
         if "origin" in repo.remotes:
             remote_url = repo.remotes["origin"].url
             p = giturlparse.parse(remote_url)
-            try:
-                info["repo"] = p.repo
-            except AttributeError:
-                pass
-            info["platform"] = p.platform
-            info["org"] = p.owner
+            if p.valid:
+                info["repo_name"] = p.name
+                info["platform"] = p.platform
+                info["org"] = p.owner
+                if p.owner and p.name:
+                    info["repo_full_name"] = f"{p.owner}/{p.name}"
+                elif p.name:
+                    info["repo_full_name"] = p.name
     return info
 
 
-def pr_ref_from_url(url):
+def pr_ref_from_url(url: str) -> str:
     if not url:
         return ""
-    # url like 'https://github.com/OCA/edi/pull/371'
-    org, repo, __, nr = url.split("/")[3:]
-    return f"{org}/{repo}#{nr}"
+    try:
+        p = giturlparse.parse(url)
+        if not p.valid:
+            return ""
+
+        owner = p.owner
+        repo_name = p.name  # For GitLab, this is just the project name, owner might contain group/subgroup
+
+        if p.platform == "github":
+            # URL: https://github.com/OCA/edi/pull/371
+            # p.owner = OCA, p.name = edi
+            # Need to extract PR number from the path
+            match = re.search(r"/pull/(\d+)", p.pathname)
+            if match:
+                pr_number = match.group(1)
+                return f"{owner}/{repo_name}#{pr_number}"
+        elif p.platform == "gitlab":
+            # URL: https://gitlab.com/group/project/-/merge_requests/123
+            # URL: https://gitlab.com/group/subgroup/project/-/merge_requests/123
+            # p.owner = group or group/subgroup, p.name = project
+            # Need to extract MR IID from the path
+            match = re.search(r/-/merge_requests/(\d+)", p.pathname)
+            if match:
+                mr_iid = match.group(1)
+                # For GitLab, repo_full_name is owner/name
+                repo_full_name = f"{owner}/{repo_name}" if owner else repo_name
+                return f"{repo_full_name}!{mr_iid}"
+    except Exception: # Broad exception to catch any parsing errors
+        return "" # Or raise a custom error / log
+    return ""

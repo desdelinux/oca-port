@@ -12,7 +12,10 @@ from .migrate_addon import MigrateAddon
 from .port_addon_pr import PortAddonPullRequest
 from .utils.git import Branch
 from .utils.github import GitHub
-from .utils.misc import Output, bcolors as bc, extract_ref_info
+from .utils.gitlab import GitLab
+from .utils.vcs import VersionControlService
+from .utils.misc import Output, bcolors as bc, extract_ref_info, pr_ref_from_url # Ensure pr_ref_from_url if needed, though not directly in this change
+import giturlparse # For __post_init__ fallback
 
 
 @dataclass
@@ -75,13 +78,18 @@ class App(Output):
     fetch: bool = False
     no_cache: bool = False
     clear_cache: bool = False
-    github_token: str = None
+    # github_token: str = None # REMOVED
     cli: bool = False  # Not documented, should not be used outside of the CLI
+
+    # VCS related attributes
+    vcs: VersionControlService = None
+    platform: str = None
+    repo_full_name_for_vcs: str = None
 
     _available_outputs = ("json",)
 
     def __post_init__(self):
-        self._prepare_parameters()
+        self._prepare_parameters() # This populates self.source, self.target with info from extract_ref_info
         # Force non-interactive mode:
         #   - if we are not in CLI mode
         if not self.cli:
@@ -107,11 +115,45 @@ class App(Output):
         # Check if source & target branches exist
         self._check_branch_exists(self.source.ref, raise_exc=True)
         self._check_branch_exists(self.target.ref, raise_exc=True)
-        # GitHub API helper
-        self.github = GitHub(self.github_token)
+
+        # Determine platform and repo_full_name primarily from target, then source
+        primary_ref_info = self.target if self.target and self.target.platform else self.source
+
+        if primary_ref_info and primary_ref_info.platform:
+            self.platform = primary_ref_info.platform
+            self.repo_full_name_for_vcs = primary_ref_info.repo_full_name
+            if self.platform == "gitlab":
+                self.vcs = GitLab()
+            elif self.platform == "github":
+                self.vcs = GitHub()
+            else:
+                raise ValueError(f"Unsupported VCS platform: {self.platform} (from primary_ref_info)")
+        else:
+            # Fallback or error if platform cannot be determined from branch refs
+            self._print("Warning: VCS platform not found in source/target ref strings. Trying 'origin' remote.")
+            if "origin" in self.repo.remotes:
+                origin_url = self.repo.remotes["origin"].url
+                p = giturlparse.parse(origin_url)
+                if p.valid:
+                    self.platform = p.platform
+                    # giturlparse full_name is owner/name, which is what we need for repo_full_name_for_vcs
+                    self.repo_full_name_for_vcs = f"{p.owner}/{p.name}" if p.owner and p.name else p.name
+                    if self.platform == "gitlab":
+                        self.vcs = GitLab()
+                    elif self.platform == "github":
+                        self.vcs = GitHub()
+                    else:
+                         raise ValueError(f"Unsupported VCS platform from origin remote: {self.platform}")
+                else:
+                    raise ValueError("Could not determine VCS platform from 'origin' remote URL (parsing failed).")
+            else:
+                raise ValueError("Could not determine VCS platform. No 'origin' remote found and not specified in source/target.")
+
+        # self.github = GitHub(self.github_token) # REMOVED
+
         # Initialize storage & cache
         self.storage = utils.storage.InputStorage(self.to_branch, self.addon)
-        self.cache = utils.cache.UserCacheFactory(self).build()
+        self.cache = utils.cache.UserCacheFactory(self).build() # UserCacheFactory will need to use self.vcs
 
     def _handle_odoo_versions(self):
         odoo_version_pattern = r"^[0-9]+\.[0-9]$"
@@ -184,13 +226,23 @@ class App(Output):
         # Handle with repo_path and repo_name
         self.repo_path = pathlib.Path(self.repo_path)
         self.repo_name = (
-            self.repo_name
-            or self.target.repo
-            or self.source.repo
-            or self.repo_path.absolute().name
+            self.repo_name # existing value if provided
+            or (main_context_info.repo_name if main_context_info else None) # repo_name from extract_ref_info
+            or self.repo_path.absolute().name # fallback to local dir name
         )
-        if not self.repo_path:
-            raise ValueError("'repo_path' has to be set.")
+        if main_context_info and main_context_info.org:
+            self.upstream_org = main_context_info.org # org from extract_ref_info (e.g. OCA)
+
+        # Ensure self.repo_full_name_for_vcs is set if platform was determined,
+        # as it's crucial for VCS operations.
+        # This happens in __post_init__ after _prepare_parameters.
+        # Here, we just ensure repo_name (project part) is available for local ops/messages.
+        if not self.repo_name:
+             # This check was originally for self.repo_path, but self.repo_name makes more sense here.
+            raise ValueError("'repo_name' (project name) could not be determined.")
+        if not self.repo_path.exists(): # Check if repo_path (directory) actually exists
+            raise ValueError(f"'repo_path' {self.repo_path} does not exist.")
+
 
         # Transform branch strings to Branch objects
         self.from_branch = self._prepare_branch(self.source)
