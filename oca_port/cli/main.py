@@ -101,8 +101,15 @@ from ..utils.misc import bcolors as bc
 @click.option(
     "--github-token",
     is_flag=True,
-    help="""Token to use when requesting GitHub API (highly recommended
-            to not trigger the "API rate limit exceeded" error).""",
+    help="""Token to use when requesting API (highly recommended
+            to not trigger the 'API rate limit exceeded' error).""",
+)
+@click.option(
+    "--platform",
+    type=click.Choice(["github", "gitlab"]),
+    default="github",
+    show_default=True,
+    help="Git hosting platform",
 )
 def main(
     addon_path: str,
@@ -121,6 +128,7 @@ def main(
     clear_cache: bool,
     dry_run: bool,
     github_token: str,
+    platform: str,
 ):
     """Migrate ADDON from SOURCE to TARGET or list Pull Requests to port.
 
@@ -156,6 +164,7 @@ def main(
             dry_run=dry_run,
             cli=True,
             github_token=github_token,
+            platform=platform,
         )
     except ForkValueError as exc:
         error_msg = prepare_remote_error_msg(*exc.args)

@@ -33,13 +33,15 @@ Syntax:
     $ oca-port <source> <target> <module_path> [options]
     $ oca-port --help
 
-GITHUB_TOKEN can be passed by exposing to environment:
+GITHUB_TOKEN (or GITLAB_TOKEN when using GitLab) can be passed by exposing to
+environment:
 
     $ export GITHUB_TOKEN=<token>
 
 Alternatively, you can pass the token directly using the `--github-token` option
 
 If neither method is used, the tool will attempt to obtain the token using the `gh` client (if it's installed).
+Use `--platform gitlab` to work with GitLab repositories.
 
 To check if an addon could be migrated or to get eligible commits to port:
 

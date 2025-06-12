@@ -36,14 +36,18 @@ class CommonCase(unittest.TestCase):
         # By cloning the first repository this will set an 'origin' remote
         self.repo_path = self._clone_tmp_git_repository(self.repo_upstream_path)
         self._add_fork_remote(self.repo_path)
-        # Patch GitHub class to prevent sending HTTP requests
-        self._patch_github_class()
+        # Patch API classes to prevent sending HTTP requests
+        self._patch_api_classes()
 
-    def _patch_github_class(self):
+    def _patch_api_classes(self):
         self.patcher = patch("oca_port.app.GitHub.request")
         github_request = self.patcher.start()
         github_request.return_value = {}
         self.addCleanup(self.patcher.stop)
+        self.patcher_gl = patch("oca_port.app.GitLab.request")
+        gitlab_request = self.patcher_gl.start()
+        gitlab_request.return_value = {}
+        self.addCleanup(self.patcher_gl.stop)
 
     def _create_tmp_git_repository(self):
         """Create a temporary Git repository to run tests."""

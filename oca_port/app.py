@@ -12,6 +12,7 @@ from .migrate_addon import MigrateAddon
 from .port_addon_pr import PortAddonPullRequest
 from .utils.git import Branch
 from .utils.github import GitHub
+from .utils.gitlab import GitLab
 from .utils.misc import Output, bcolors as bc, extract_ref_info
 
 
@@ -55,8 +56,11 @@ class App(Output):
         clear_cache:
             flag to remove the user's cache once the process is done
         github_token:
-            Token to use when requesting GitHub API (highly recommended
+            Token to use when requesting the platform API (highly recommended
             to not trigger the "API rate limit exceeded" error).
+        platform:
+            Git hosting platform to use. Supported values are 'github' and
+            'gitlab'.
     """
 
     source: str
@@ -76,6 +80,7 @@ class App(Output):
     no_cache: bool = False
     clear_cache: bool = False
     github_token: str = None
+    platform: str = "github"
     cli: bool = False  # Not documented, should not be used outside of the CLI
 
     _available_outputs = ("json",)
@@ -107,8 +112,16 @@ class App(Output):
         # Check if source & target branches exist
         self._check_branch_exists(self.source.ref, raise_exc=True)
         self._check_branch_exists(self.target.ref, raise_exc=True)
-        # GitHub API helper
-        self.github = GitHub(self.github_token)
+        # API helper depending on the platform
+        platform = (
+            self.platform or self.source.get("platform") or self.target.get("platform")
+        )
+        if platform and platform.lower() == "gitlab":
+            self.github = GitLab(self.github_token)
+            self.platform = "gitlab"
+        else:
+            self.github = GitHub(self.github_token)
+            self.platform = "github"
         # Initialize storage & cache
         self.storage = utils.storage.InputStorage(self.to_branch, self.addon)
         self.cache = utils.cache.UserCacheFactory(self).build()
