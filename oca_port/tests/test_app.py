@@ -104,6 +104,12 @@ class TestApp(common.CommonCase):
         with self.assertRaisesRegex(ValueError, error_msg):
             app.run()
 
+    def test_app_gitlab_platform(self):
+        app = self._create_app(self.source1, self.target1, platform="gitlab")
+        from oca_port.utils.gitlab import GitLab
+
+        self.assertIsInstance(app.github, GitLab)
+
     def test_app_nothing_to_port_non_interactive(self):
         app = self._create_app(self.source1, self.target1, non_interactive=True)
         result = app.run()
