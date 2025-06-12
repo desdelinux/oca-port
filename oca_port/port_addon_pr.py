@@ -67,6 +67,14 @@ def path_to_skip(commit_path):
 
 
 class PortAddonPullRequest(Output):
+    @property
+    def req_term(self):
+        return "Merge Request" if self.app.platform == "gitlab" else "Pull Request"
+
+    @property
+    def req_term_plural(self):
+        return "Merge Requests" if self.app.platform == "gitlab" else "Pull Requests"
+
     def __init__(self, app, push_branch=True):
         """Port pull requests of an addon."""
         self.app = app
@@ -83,7 +91,7 @@ class PortAddonPullRequest(Output):
         self._print(
             f"{bc.BOLD}{self.app.addon}{bc.END} already exists "
             f"on {bc.BOLD}{self.app.to_branch.ref()}{bc.END}, "
-            "checking PRs to port..."
+            f"checking {self.req_term_plural} to port..."
         )
         branches_diff = BranchesDiff(self.app)
         if branches_diff.commits_diff["addon"]:
@@ -138,7 +146,7 @@ class PortAddonPullRequest(Output):
         return dest_branch_name
 
     def _port_pull_requests(self, branches_diff):
-        """Open new Pull Requests (if it doesn't exist) on the GitHub repository."""
+        """Open new Pull/Merge Requests (if it doesn't exist) on the repository."""
         # Now we have a destination branch, check if there is ongoing work on it
         wip = self._print_wip_session()
         dest_branch_name = self.app.destination.branch
@@ -202,11 +210,11 @@ class PortAddonPullRequest(Output):
         for pr, commits in branches_diff.commits_diff["addon"].items():
             # Check if PR has been blacklisted in user's session
             if self._is_pr_blacklisted(pr):
-                if self._confirm_pr_blacklisted(pr):
+                if self._confirm_pr_blacklisted(pr): # Uses req_term internally now
                     continue
-            # Port PR
+            # Port PR/MR
             current_commit = self.app.repo.commit(dest_branch.ref())
-            pr_ported = self._port_pull_request_commits(
+            pr_ported = self._port_pull_request_commits( # Uses req_term internally now
                 pr,
                 commits,
                 base_ref,
@@ -214,14 +222,14 @@ class PortAddonPullRequest(Output):
             )
             if pr_ported:
                 # Check if commits have been ported.
-                # If none has been ported, blacklist automatically the current PR.
+                # If none has been ported, blacklist automatically the current PR/MR.
                 if self.app.repo.commit(dest_branch.ref()) == current_commit:
                     self._print("\tℹ️  Nothing has been ported, skipping")
-                    self._handle_pr_blacklist(
-                        pr, reason=f"(auto) Nothing to port from PR #{pr.number}"
+                    self._handle_pr_blacklist( # Uses req_term internally now
+                        pr, reason=f"(auto) Nothing to port from {self.req_term} #{pr.number}"
                     )
                     msg = (
-                        f"\t{bc.DIM}PR #{pr.number} has been"
+                        f"\t{bc.DIM}{self.req_term} #{pr.number} has been"
                         if pr.number
                         else "Orphaned commits have been"
                     ) + f" automatically blacklisted{bc.ENDD}"
@@ -229,7 +237,7 @@ class PortAddonPullRequest(Output):
                     continue
                 self._handle_pr_ported(pr)
                 if pr == last_pr:
-                    self._print("\t🎉 Last PR processed! 🎉")
+                    self._print(f"\t🎉 Last {self.req_term} processed! 🎉")
         return True
 
     def _get_session_name(self):
@@ -245,19 +253,19 @@ class PortAddonPullRequest(Output):
         return session
 
     def _is_pr_blacklisted(self, pr):
-        """Check if PR is blacklisted in current user's session."""
+        """Check if PR/MR is blacklisted in current user's session."""
         session = self._init_session()
         data = session.get_data()
         return bool(data["pull_requests"]["blacklisted"][pr.ref])
 
     def _confirm_pr_blacklisted(self, pr):
-        """Ask the user if PR should still be blacklisted."""
+        """Ask the user if PR/MR should still be blacklisted."""
         self._print(
-            f"- {bc.BOLD}{bc.WARNING}PR #{pr.number}{bc.END} "
+            f"- {bc.BOLD}{bc.WARNING}{self.req_term} #{pr.number}{bc.END} "
             f"is blacklisted in current user's session"
         )
         if not click.confirm("\tKeep it blacklisted?"):
-            # Remove the PR from the session
+            # Remove the PR/MR from the session
             session = self._init_session()
             data = session.get_data()
             if pr.ref in data["pull_requests"]["blacklisted"]:
@@ -267,13 +275,13 @@ class PortAddonPullRequest(Output):
         return True
 
     def _handle_pr_blacklisted(self, pr):
-        """Check if PR is blacklisted in current user's session.
+        """Check if PR/MR is blacklisted in current user's session.
 
         Return True if workflow
         """
 
     def _handle_pr_blacklist(self, pr, reason=None):
-        if not click.confirm("\tBlacklist this PR?"):
+        if not click.confirm(f"\tBlacklist this {self.req_term}?"):
             return False
         if not reason:
             reason = click.prompt("\tReason", type=str)
@@ -303,14 +311,14 @@ class PortAddonPullRequest(Output):
             if (
                 self.app.storage.is_pr_blacklisted(pr["ref"])
                 # TODO: Backward compat for old tracking only by number
-                or self.app.storage.is_pr_blacklisted(pr["number"])
+                or self.app.storage.is_pr_blacklisted(pr["number"]) # This refers to PR number or MR IID
             ):
                 continue
             self.app.storage.blacklist_pr(pr["ref"], reason=pr["reason"])
         if self.app.storage.dirty:
-            pr_refs = ", ".join([str(pr["number"]) for pr in blacklisted.values()])
+            pr_refs = ", ".join([str(pr["number"]) for pr in blacklisted.values()]) # number is PR number or MR IID
             self.app.storage.commit(
-                msg=f"oca-port: blacklist PR(s) {pr_refs} for {self.app.addon}"
+                msg=f"oca-port: blacklist {self.req_term_plural} {pr_refs} for {self.app.addon}"
             )
 
     def _print_wip_session(self):
@@ -323,17 +331,17 @@ class PortAddonPullRequest(Output):
                 f"{bc.BOLD}{self.app.destination.branch}{bc.END}:"
             )
             wip = True
-        # Ported PRs
+        # Ported PRs/MRs
         if data["pull_requests"]["ported"]:
-            self._print("\t✅ Ported PRs:")
+            self._print(f"\t✅ Ported {self.req_term_plural}:")
         for pr_data in data["pull_requests"]["ported"].values():
             self._print(
                 f"\t- {bc.BOLD}{bc.OKBLUE}{pr_data['ref']}{bc.END} "
                 f"{bc.OKBLUE}{pr_data['title']}{bc.ENDC}:"
             )
-        # Blacklisted PRs
+        # Blacklisted PRs/MRs
         if data["pull_requests"]["blacklisted"]:
-            self._print("\t⛔ Blacklisted PRs:")
+            self._print(f"\t⛔ Blacklisted {self.req_term_plural}:")
         for pr_data in data["pull_requests"]["blacklisted"].values():
             self._print(
                 f"\t- {bc.BOLD}{bc.WARNING}{pr_data['ref']}{bc.END} "
@@ -346,57 +354,60 @@ class PortAddonPullRequest(Output):
     def _push_and_open_pr(self):
         session = self._init_session()
         data = session.get_data()
-        processed_prs = data["pull_requests"]["ported"]
+        processed_prs = data["pull_requests"]["ported"] # These are now generic request objects
         blacklisted_prs = data["pull_requests"]["blacklisted"]
         if not processed_prs and not blacklisted_prs:
             self._print("ℹ️  Nothing has been ported or blacklisted.")
             return False
-        pr_data = self._prepare_pull_request_data(processed_prs, blacklisted_prs)
-        # Try to push and open PR against remote repository
+        pr_data = self._prepare_pull_request_data(processed_prs, blacklisted_prs) # Updated to be generic
+        # Try to push and open PR/MR against remote repository
         is_pushed = self._push_branch_to_remote()
         if not is_pushed:
             self._print(
                 f"\nℹ️  Branch {bc.BOLD}{self.app.destination.branch}{bc.END} couldn't "
-                "be pushed (no remote defined)"
+                "be pushed (no remote defined for destination)"
             )
-            self._print_tips(pr_data)
+            self._print_tips(pr_data) # Uses req_term
             return False
-        if not self.open_pr:
+        if not self.open_pr: # self.open_pr depends on self.app.destination.org being set
             self._print(
-                f"\nℹ️  PR based on {bc.BOLD}{self.app.destination.branch}{bc.END} couldn't "
-                "be open (no remote defined)"
+                f"\nℹ️  {self.req_term} based on {bc.BOLD}{self.app.destination.branch}{bc.END} couldn't "
+                "be opened (no organization/group defined for destination)"
             )
             self._print_tips(pr_data)
             return False
-        pr_url = self._search_pull_request(pr_data["base"], pr_data["title"])
+
+        # Use target_branch from pr_data for search, as it's the base branch
+        pr_url = self._search_existing_request(pr_data["target_branch"], pr_data["title"])
         if pr_url:
-            self._print(f"Existing PR has been refreshed => {pr_url}")
+            self._print(f"Existing {self.req_term} has been refreshed => {pr_url}")
         else:
-            self._create_pull_request(pr_data, processed_prs)
+            self._create_platform_request(pr_data, processed_prs)
 
     def _print_tips(self, pr_data):
-        self._print("Here is the default PR content that would have been used:")
+        self._print(f"Here is the default {self.req_term} content that would have been used:")
         self._print(f"\n{bc.BOLD}Title:{bc.END}")
         self._print(pr_data["title"])
         self._print(f"\n{bc.BOLD}Description:{bc.END}")
         self._print(pr_data["body"])
 
     def _port_pull_request_commits(self, pr, commits, base_ref, branch):
-        """Port commits of a Pull Request in a new branch."""
-        if pr.number:
+        """Port commits of a Pull/Merge Request in a new branch."""
+        if pr.number: # pr.number is the PR number or MR IID
             self._print(
-                f"- {bc.BOLD}{bc.OKCYAN}Port PR {pr.ref}{bc.END} "
+                f"- {bc.BOLD}{bc.OKCYAN}Port {self.req_term} {pr.ref}{bc.END} "
                 f"{bc.OKCYAN}{pr.title}{bc.ENDC}..."
             )
             self._print(f"\t{pr.url}")
         else:
-            self._print(f"- {bc.BOLD}{bc.OKCYAN}Port commits w/o PR{bc.END}...")
-        # Ask the user if he wants to port the PR (or orphaned commits)
+            self._print(f"- {bc.BOLD}{bc.OKCYAN}Port commits w/o {self.req_term}{bc.END}...")
+        # Ask the user if he wants to port the PR/MR (or orphaned commits)
+        # The "it/them" refers to commits, so this prompt can remain largely the same.
         if not click.confirm("\tPort it?" if pr.number else "\tPort them?"):
-            self._handle_pr_blacklist(pr)
+            self._handle_pr_blacklist(pr) # Uses req_term
             return False
 
-        # Cherry-pick commits of the source PR
+        # Cherry-pick commits of the source PR/MR
         for commit in commits:
             self._print(
                 f"\t\tApply {bc.OKCYAN}{commit.hexsha[:8]}{bc.ENDC} "
@@ -529,81 +540,134 @@ class PortAddonPullRequest(Output):
             )
         # Handle blacklisted PRs
         if blacklisted_prs:
-            if not title:
+            if not title: # Only blacklisted items
                 title = (
-                    f"[{self.app.target_version}][FW] Blacklist of some PRs "
-                    f"from {self.app.source_version}"
+                    f"[{self.app.target_version}][FW] Blacklist some {self.req_term_plural} "
+                    f"from {self.app.source_version} for {self.app.addon}"
                 )
             lines2 = [
-                f"- #{pr['number']}: {pr['reason']}" for pr in blacklisted_prs.values()
+                f"- {self.req_term} #{pr['number']}: {pr['reason']}" for pr in blacklisted_prs.values()
             ]
-            body2 = "\n".join(["The following PRs have been blacklisted:"] + lines2)
+            body2 = "\n".join([f"The following {self.req_term_plural} have been blacklisted:"] + lines2)
             if body:
                 body = "\n\n".join([body, body2])
             else:
                 body = body2
+
+        # Generic structure for platform-specific adaptation later
         return {
-            "draft": True,
             "title": title,
-            "head": f"{self.app.destination.org}:{self.app.destination.branch}",
-            "base": self.app.to_branch.name,
             "body": body,
+            "target_branch": self.app.to_branch.name, # base branch
+            "source_branch": self.app.destination.branch, # head branch for MR
+            "github_head": f"{self.app.destination.org}:{self.app.destination.branch}", # For GitHub
+            "draft": True # Common field, GitLab might use labels or specific API field
         }
 
-    def _search_pull_request(self, base_branch, title):
-        params = {
-            "q": (
-                f"is:pr "
-                f"repo:{self.app.upstream_org}/{self.app.repo_name} "
-                f"base:{base_branch} "
-                f"state:open {title} in:title"
-            ),
-        }
-        response = self.app.github.request("search/issues", params=params)
-        if response["items"]:
-            return response["items"][0]["html_url"]
+    def _search_existing_request(self, base_branch, title):
+        # Note: title here is the generated title for the new PR/MR,
+        # self.app.vcs.search_migration_requests searches by "mig <addon>" in title.
+        # This is a functional change. If a search by full title is needed,
+        # the VCS interface might need a new method.
+        # For now, we adapt to the existing search_migration_requests.
+        # It's possible the original search was too broad or too specific anyway.
+        # The key is finding an *existing migration PR/MR for this addon to this target branch*.
+        pr_object = self.app.vcs.search_migration_requests(
+            repo_full_name=self.app.repo_full_name_for_vcs, # This should be the target repo (e.g. OCA/repo)
+            target_branch=base_branch, # Target branch for the PR/MR
+            addon_name=self.app.addon
+        )
+        if pr_object:
+            return pr_object.url
+        return None
 
-    def _create_pull_request(self, pr_data, processed_prs):
-        if len(processed_prs) > 1:
+    def _create_platform_request(self, pr_data, processed_prs):
+        repo_full_name = self.app.repo_full_name_for_vcs # Target repository (e.g. OCA/repo)
+
+        if len(processed_prs) > 1: # processed_prs contains generic request objects
             self._print(
-                "PR(s) ported locally:",
+                f"{self.req_term_plural} ported locally:",
                 ", ".join(
-                    [f"{bc.OKCYAN}#{pr.number}{bc.ENDC}" for pr in processed_prs]
+                    [f"{bc.OKCYAN}#{pr['number']}{bc.ENDC}" for pr in processed_prs.values()]
                 ),
             )
+
+        # Prepare data for VCS call based on platform
+        data_for_vcs = {
+            "title": pr_data["title"],
+            # body / description mapping
+        }
+        if self.app.platform == "github":
+            data_for_vcs["body"] = pr_data["body"]
+            data_for_vcs["head"] = pr_data["github_head"] # org:branch
+            data_for_vcs["base"] = pr_data["target_branch"]
+            data_for_vcs["draft"] = pr_data["draft"]
+        elif self.app.platform == "gitlab":
+            data_for_vcs["description"] = pr_data["body"]
+            data_for_vcs["source_branch"] = pr_data["source_branch"]
+            data_for_vcs["target_branch"] = pr_data["target_branch"]
+            if pr_data["draft"]:
+                # GitLab uses this for draft MRs via API at creation
+                # Or use labels: data_for_vcs["labels"] = "Draft"
+                data_for_vcs["title"] = f"Draft: {pr_data['title']}"
+
+
         if click.confirm(
-            f"Create a draft PR from '{bc.BOLD}{self.app.destination.branch}{bc.END}' "
-            f"to '{bc.BOLD}{self.app.to_branch.name}{bc.END}' "
-            f"against {bc.BOLD}{self.app.upstream_org}/{self.app.repo_name}{bc.END}?"
+            f"Create a draft {self.req_term} from '{bc.BOLD}{self.app.destination.branch}{bc.END}' "
+            f"to '{bc.BOLD}{pr_data['target_branch']}{bc.END}' "
+            f"against {bc.BOLD}{repo_full_name}{bc.END}?"
         ):
-            response = self.app.github.request(
-                f"repos/{self.app.upstream_org}/{self.app.repo_name}/pulls",
-                method="post",
-                json=pr_data,
-            )
-            pr_url = response["html_url"]
-            self._print(
-                f"\t{bc.BOLD}{bc.OKCYAN}PR created =>" f"{bc.ENDC} {pr_url}{bc.END}"
-            )
-            return pr_url
-        # Invite the user to open the PR on its own
-        pr_title_encoded = urllib.parse.quote(pr_data["title"])
-        new_pr_url = NEW_PR_URL.format(
-            from_org=self.app.upstream_org,
-            repo_name=self.app.repo_name,
-            to_branch=self.app.to_branch.name,
-            to_org=self.app.destination.org,
-            pr_branch=self.app.destination.branch,
-            title=pr_title_encoded,
+            try:
+                response_data = self.app.vcs.create_request(
+                    repo_full_name=repo_full_name, data=data_for_vcs
+                )
+                # VCS methods should ideally return a common structure or direct URL
+                pr_url = response_data.get("html_url") or response_data.get("web_url")
+                if pr_url:
+                    self._print(
+                        f"\t{bc.BOLD}{bc.OKCYAN}{self.req_term} created =>" f"{bc.ENDC} {pr_url}{bc.END}"
+                    )
+                    return pr_url
+                else:
+                    self._print(f"{bc.FAIL}Failed to create {self.req_term}. Response: {response_data}{bc.ENDC}")
+            except Exception as e:
+                self._print(f"{bc.FAIL}Error creating {self.req_term}: {e}{bc.ENDC}")
+
+        # Invite the user to open the PR/MR on their own
+        # self.app.destination.org might be the user's fork org (e.g. "user_github")
+        # self.app.upstream_org is the target repo's org (e.g. "OCA")
+        # self.app.repo_name is the target repo's name (e.g. "server-tools")
+
+        # For GitLab, head_branch_owner_or_group is tricky for URLs if it's a fork.
+        # The get_pr_or_mr_url for GitLab assumes MR within the same project for simplicity.
+        # If self.app.destination.org is different from self.app.upstream_org, it implies a fork.
+        head_owner = self.app.destination.org or self.app.upstream_org # Fallback if dest.org not set
+
+        manual_url = self.app.vcs.get_pr_or_mr_url(
+            owner_or_group=self.app.upstream_org, # Target org/group
+            repo_or_project=self.app.repo_name,   # Target repo/project name
+            target_branch=pr_data["target_branch"],
+            head_branch_owner_or_group=head_owner, # Source org/group (user's fork)
+            head_branch=pr_data["source_branch"],  # Source branch name
+            title=pr_data["title"],
+            body=pr_data["body"]
         )
         self._print(
-            "\nℹ️  You can still open the PR yourself there:\n" f"\t{new_pr_url}\n"
+            f"\nℹ️  You can still open the {self.req_term} yourself there:\n" f"\t{manual_url}\n"
         )
         self._print_tips(pr_data)
 
 
 class BranchesDiff(Output):
-    """Helper to compare easily commits (and related PRs) between two branches."""
+    """Helper to compare easily commits (and related PRs/MRs) between two branches."""
+
+    @property
+    def req_term(self):
+        return "Merge Request" if self.app.platform == "gitlab" else "Pull Request"
+
+    @property
+    def req_term_plural(self):
+        return "Merge Requests" if self.app.platform == "gitlab" else "Pull Requests"
 
     def __init__(self, app):
         self.app = app
@@ -683,14 +747,14 @@ class BranchesDiff(Output):
         i = 0
         key = "addon"
         for i, pr in enumerate(self.commits_diff[key], 1):
-            if pr.number:
+            if pr.number: # This is PR number or MR IID
                 lines_to_print.append(
-                    f"{i}) {bc.BOLD}{bc.OKBLUE}{pr.ref}{bc.END} "
+                    f"{i}) {bc.BOLD}{bc.OKBLUE}{pr.ref}{bc.END} " # pr.ref is owner/repo#num or group/project!iid
                     f"{bc.OKBLUE}{pr.title}{bc.ENDC}:"
                 )
                 lines_to_print.append(f"\tBy {pr.author}, merged at {pr.merged_at}")
             else:
-                lines_to_print.append(f"{i}) {bc.BOLD}{bc.OKBLUE}w/o PR{bc.END}:")
+                lines_to_print.append(f"{i}) {bc.BOLD}{bc.OKBLUE}w/o {self.req_term}{bc.END}:")
                 fake_pr = pr
             if verbose:
                 pr_paths = ", ".join([f"{bc.DIM}{path}{bc.ENDD}" for path in pr.paths])
@@ -716,15 +780,15 @@ class BranchesDiff(Output):
             i -= 1
             nb_commits = len(self.commits_diff[key][fake_pr])
             message = (
-                f"{bc.BOLD}{bc.OKBLUE}{i} pull request(s){bc.END} "
+                f"{bc.BOLD}{bc.OKBLUE}{i} {self.req_term_plural}{bc.END} "
                 f"and {bc.BOLD}{bc.OKBLUE}{nb_commits} commit(s) w/o "
-                f"PR{bc.END} related to '{bc.OKBLUE}{self.path}"
+                f"{self.req_term}{bc.END} related to '{bc.OKBLUE}{self.path}"
                 f"{bc.ENDC}' to port from {self.app.from_branch.ref()} "
                 f"to {self.app.to_branch.ref()}"
             )
         else:
             message = (
-                f"{bc.BOLD}{bc.OKBLUE}{i} pull request(s){bc.END} "
+                f"{bc.BOLD}{bc.OKBLUE}{i} {self.req_term_plural}{bc.END} "
                 f"related to '{bc.OKBLUE}{self.path}{bc.ENDC}' to port from "
                 f"{self.app.from_branch.ref()} to {self.app.to_branch.ref()}"
             )
@@ -740,7 +804,7 @@ class BranchesDiff(Output):
         self._print()
         lines_to_print = []
         msg = (
-            f"ℹ️  {nb_prs} other PRs related to {bc.OKBLUE}{self.app.addon}{bc.ENDC} "
+            f"ℹ️  {nb_prs} other {self.req_term_plural} related to {bc.OKBLUE}{self.app.addon}{bc.ENDC} "
             "are also updating satellite modules/root files"
         )
         if verbose:
@@ -804,27 +868,27 @@ class BranchesDiff(Output):
         """
         commits_by_pr = defaultdict(list)
         fake_pr = g.PullRequest(*[""] * 6)
-        # 1st loop to collect original PRs and stack orphaned commits in a fake PR
+        # 1st loop to collect original PRs/MRs and stack orphaned commits in a fake PR/MR
         for commit in self.from_branch_path_commits:
             if commit in self.to_branch_all_commits:
                 self.app.cache.mark_commit_as_ported(commit.hexsha)
                 continue
-            # Get related Pull Request if any,
-            # or fallback on a fake PR to host orphaned commits
+            # Get related Pull Request/Merge Request if any,
+            # or fallback on a fake PR/MR to host orphaned commits
             # This call has two effects:
-            #   - put in cache original PRs (so the 2nd loop is faster)
-            #   - stack orphaned commits in fake PR
-            self._get_original_pr(commit, fallback_pr=fake_pr)
-        # 2nd loop to actually analyze the content of commits/PRs
+            #   - put in cache original PRs/MRs (so the 2nd loop is faster)
+            #   - stack orphaned commits in fake PR/MR
+            self._get_original_request(commit, fallback_pr=fake_pr)
+        # 2nd loop to actually analyze the content of commits/PRs/MRs
         for commit in self.from_branch_path_commits:
             if commit in self.to_branch_all_commits:
                 self.app.cache.mark_commit_as_ported(commit.hexsha)
                 continue
-            # Get related Pull Request if any,
-            # or fallback on a fake PR that hosts orphaned commits
-            pr = self._get_original_pr(commit, fallback_pr=fake_pr)
-            if pr:
-                for pr_commit_sha in pr.commits:
+            # Get related Pull Request/Merge Request if any,
+            # or fallback on a fake PR/MR that hosts orphaned commits
+            pr = self._get_original_request(commit, fallback_pr=fake_pr)
+            if pr: # pr is a g.PullRequest object
+                for pr_commit_sha in pr.commits: # These are SHAs
                     try:
                         raw_commit = self.app.repo.commit(pr_commit_sha)
                     except ValueError:
@@ -907,11 +971,11 @@ class BranchesDiff(Output):
                 key = "satellite"
             blacklisted = self.app.storage.is_pr_blacklisted(pr.ref)
             if not blacklisted:
-                # TODO: Backward compat for old tracking only by number
+                # TODO: Backward compat for old tracking only by number (pr.number is PR num or MR IID)
                 blacklisted = self.app.storage.is_pr_blacklisted(pr.number)
             if blacklisted:
                 msg = (
-                    f"{bc.DIM}PR #{pr.number}" if pr.number else "Orphaned commits"
+                    f"{bc.DIM}{self.req_term} #{pr.number}" if pr.number else "Orphaned commits"
                 ) + f" blacklisted ({blacklisted}){bc.ENDD}"
                 self._print(msg)
                 continue
@@ -919,70 +983,83 @@ class BranchesDiff(Output):
         return sorted_commits_by_pr
 
     def _is_pr_updating_addon(self, pr):
-        """Check if a PR still needs to update the analyzed addon."""
+        """Check if a PR/MR still needs to update the analyzed addon."""
         for path in pr.paths_not_ported:
             path_ = pathlib.Path(path)
-            if path_.name == self.app.addon:
+            if path_.name == self.app.addon: # self.app.addon is just the addon name
                 return True
         return False
 
-    def _get_original_pr(self, commit: g.Commit, fallback_pr=None):
-        """Return the original PR of a given commit.
+    def _get_original_request(self, commit: g.Commit, fallback_pr=None):
+        """Return the original PR/MR of a given commit.
 
         If `fallback_pr` is provided, it'll be returned with the commit stacked in it.
 
-        This method is taking care of storing in cache the original PR of a commit.
+        This method is taking care of storing in cache the original PR/MR of a commit.
         """
         # Try to get the data from the user's cache first
-        data = self.app.cache.get_pr_from_commit(commit.hexsha)
-        if data:
+        data = self.app.cache.get_pr_from_commit(commit.hexsha) # commit.hexsha is the key
+        if data: # data is the cached dict for g.PullRequest
             return g.PullRequest(**data)
-        # Request GitHub to get them
-        if not any("github.com" in remote.url for remote in self.app.repo.remotes):
-            return self._handle_fallback_pr(fallback_pr, commit)
-        src_repo_name = self.app.source.repo or self.app.repo_name
+
+        # Determine the repository full name to search on VCS
+        # If self.app.source is a remote ref, it has platform & repo_full_name
+        if self.app.source and self.app.source.repo_full_name:
+            repo_to_search_on_vcs = self.app.source.repo_full_name
+        else:
+            # If source is local or not providing full name, use app's main VCS repo
+            repo_to_search_on_vcs = self.app.repo_full_name_for_vcs
+            if not repo_to_search_on_vcs: # Should not happen if app initialized correctly
+                 self._print(f"{bc.WARNING}Could not determine repository to search for original {self.req_term}.{bc.ENDC}")
+                 return self._handle_fallback_pr(fallback_pr, commit)
+
+        raw_pr_object = None # This will be a g.PullRequest like object from VCS service
         try:
-            # 1st attempt: detect original PR from source branch
+            # 1st attempt: detect original PR/MR from source branch
             # (e.g. if source branch == 'master')
-            raw_data = self.app.github.get_original_pr(
-                self.app.upstream_org,
-                src_repo_name,
-                self.app.source.branch,
-                commit.hexsha,
+            raw_pr_object = self.app.vcs.get_original_request(
+                repo_full_name=repo_to_search_on_vcs,
+                branch=self.app.source.branch,
+                commit_sha=commit.hexsha,
             )
-            if not raw_data:
-                # 2nd attempt: detect original PR from source version
+            if not raw_pr_object:
+                # 2nd attempt: detect original PR/MR from source version
                 # (e.g. if working from a specific branch as source)
-                raw_data = self.app.github.get_original_pr(
-                    self.app.upstream_org,
-                    src_repo_name,
-                    self.app.source_version,
-                    commit.hexsha,
-                )
-        except requests.exceptions.ConnectionError:
-            self._print("⚠️  Unable to detect original PR (connection error)")
+                # This is relevant if self.app.source.branch is a temporary/feature branch
+                # and the actual merge happened against the main version branch.
+                if self.app.source.branch != self.app.source_version:
+                    raw_pr_object = self.app.vcs.get_original_request(
+                        repo_full_name=repo_to_search_on_vcs,
+                        branch=self.app.source_version, # Use the base version branch
+                        commit_sha=commit.hexsha,
+                    )
+        except (requests.exceptions.ConnectionError, RuntimeError) as e: # VCS request can raise RuntimeError
+            self._print(f"⚠️  Unable to detect original {self.req_term} (connection error: {e})")
             return self._handle_fallback_pr(fallback_pr, commit)
-        if raw_data:
-            # Get all commits of the PR as they could update others addons
+
+        if raw_pr_object: # This is now a PullRequest object from .git (or similar from VCS)
+            # Get all commits of the PR/MR as they could update others addons
             # than the one the user is interested in.
-            # NOTE: commits fetched from PR are already in the right order
-            pr_number = raw_data["number"]
-            pr_commits_data = self.app.github.request(
-                f"repos/{self.app.upstream_org}/{src_repo_name}"
-                f"/pulls/{pr_number}/commits?per_page=100"
+            pr_number = raw_pr_object.number # PR number or MR IID
+
+            # Fetch commit SHAs for this PR/MR
+            pr_commit_shas = self.app.vcs.get_request_commits(
+                repo_full_name=repo_to_search_on_vcs, # Use the same repo where PR/MR was found
+                request_id=pr_number
             )
-            pr_commits = [pr["sha"] for pr in pr_commits_data]
-            data = {
-                "number": raw_data["number"],
-                "url": raw_data["html_url"],
-                "author": raw_data["user"].get("login", ""),
-                "title": raw_data["title"],
-                "body": raw_data["body"],
-                "merged_at": raw_data["merged_at"],
-                "commits": pr_commits,
+
+            data_to_cache = {
+                "number": pr_number,
+                "url": raw_pr_object.url,
+                "author": raw_pr_object.author,
+                "title": raw_pr_object.title,
+                "body": raw_pr_object.body,
+                "merged_at": raw_pr_object.merged_at,
+                "commits": pr_commit_shas, # List of commit SHAs
             }
-            self.app.cache.store_commit_pr(commit.hexsha, data)
-            return g.PullRequest(**data)
+            self.app.cache.store_commit_pr(commit.hexsha, data_to_cache) # Cache it
+            return g.PullRequest(**data_to_cache) # Create a new g.PullRequest for internal use
+
         return self._handle_fallback_pr(fallback_pr, commit)
 
     def _handle_fallback_pr(self, fallback_pr, commit):
